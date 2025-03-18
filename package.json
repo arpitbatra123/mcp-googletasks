@@ -1,0 +1,24 @@
+{
+  "name": "mcp-google-tasks",
+  "version": "1.0.0",
+  "description": "MCP server for Google Tasks integration",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc && chmod 755 build/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.7.0",
+    "dotenv": "^16.4.1",
+    "google-auth-library": "^9.4.2",
+    "googleapis": "^131.0.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
