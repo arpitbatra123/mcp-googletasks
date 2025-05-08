@@ -1,0 +1,31 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - googleClientId
+      - googleClientSecret
+    properties:
+      googleClientId:
+        type: string
+        description: Google OAuth Client ID
+      googleClientSecret:
+        type: string
+        description: Google OAuth Client Secret
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => ({
+      command: 'node',
+      args: ['build/index.js'],
+      env: {
+        GOOGLE_CLIENT_ID: config.googleClientId,
+        GOOGLE_CLIENT_SECRET: config.googleClientSecret
+      }
+    })
+  exampleConfig:
+    googleClientId: your-google-client-id.apps.googleusercontent.com
+    googleClientSecret: your-google-client-secret
