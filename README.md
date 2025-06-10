@@ -1,5 +1,7 @@
 # Google Tasks MCP Server
 
+[![smithery badge](https://smithery.ai/badge/@arpitbatra123/mcp-googletasks)](https://smithery.ai/server/@arpitbatra123/mcp-googletasks)
+
 This Model Context Protocol (MCP) server provides a bridge between Claude and Google Tasks, allowing you to manage your task lists and tasks directly through Claude.
 
 **Note:** All ( bar some edits ) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude with instructions from me.
@@ -67,6 +69,15 @@ This MCP server provides the following functionality:
 Replace the path and credentials with your own values.
 
 ### 3. Build and Run the Server
+#### Installing via Smithery
+
+To install Google Tasks Integration Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@arpitbatra123/mcp-googletasks):
+
+```bash
+npx -y @smithery/cli install @arpitbatra123/mcp-googletasks --client claude
+```
+
+#### Manual Installation
 
 1. Install dependencies:
 ```bash
