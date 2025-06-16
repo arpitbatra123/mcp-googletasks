@@ -4,6 +4,10 @@
 
 This Model Context Protocol (MCP) server provides a bridge between Claude and Google Tasks, allowing you to manage your task lists and tasks directly through Claude.
 
+<a href="https://glama.ai/mcp/servers/@arpitbatra123/mcp-googletasks">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@arpitbatra123/mcp-googletasks/badge" alt="Google Tasks Server MCP server" />
+</a>
+
 **Note:** All ( bar some edits ) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude with instructions from me.
 
 ## Features
