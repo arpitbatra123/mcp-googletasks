@@ -1,6 +1,7 @@
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/arpitbatra123-mcp-googletasks-badge.png)](https://mseep.ai/app/arpitbatra123-mcp-googletasks)
 
 # Google Tasks MCP Server
+[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/arpitbatra123/mcp-googletasks)](https://archestra.ai/mcp-catalog/arpitbatra123__mcp-googletasks)
 
 [![smithery badge](https://smithery.ai/badge/@arpitbatra123/mcp-googletasks)](https://smithery.ai/server/@arpitbatra123/mcp-googletasks)
 
