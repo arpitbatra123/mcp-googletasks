@@ -46,7 +46,7 @@ This MCP server provides the following functionality:
 6. Click "Create Credentials" > "OAuth Client ID"
 7. Configure the OAuth consent screen (External is fine for personal use)
 8. For Application Type, select "Web application"
-9. Add "http://localhost:3000" as an authorized redirect URI
+9. Add "http://localhost:3000/oauth2callback" as an authorized redirect URI
 10. Create the client ID and secret
 
 ### 2. Configure Claude for Desktop
