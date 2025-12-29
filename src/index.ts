@@ -5,7 +5,7 @@ import { z } from "zod";
 import { google } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import * as http from "http";
-import * as path from "path";
+import * as net from "net";
 import dotenv from "dotenv";
 import url from "url";
 
@@ -14,18 +14,60 @@ dotenv.config();
 
 // Constants
 const SCOPES = ["https://www.googleapis.com/auth/tasks"];
+const REDIRECT_PORT = 3000;
+
+// Type definitions
+interface StoredCredentials {
+  access_token: string;
+  refresh_token?: string;
+  expiry_date?: number;
+  token_type?: string;
+  scope?: string;
+}
+
+// Environment variable validation
+function validateEnvironment(): { clientId: string; clientSecret: string; redirectUri: string } {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || `http://localhost:${REDIRECT_PORT}/oauth2callback`;
+
+  if (!clientId) {
+    throw new Error(
+      'Missing required environment variable: GOOGLE_CLIENT_ID\n' +
+      'Please set this variable before starting the server.'
+    );
+  }
+
+  if (!clientSecret) {
+    throw new Error(
+      'Missing required environment variable: GOOGLE_CLIENT_SECRET\n' +
+      'Please set this variable before starting the server.'
+    );
+  }
+
+  // Validate client ID format (should be reasonably long)
+  if (clientId.length < 10) {
+    throw new Error('GOOGLE_CLIENT_ID appears to be invalid (too short)');
+  }
+
+  // Validate redirect URI format
+  try {
+    new URL(redirectUri);
+  } catch {
+    throw new Error(`Invalid redirect URI format: ${redirectUri}`);
+  }
+
+  return { clientId, clientSecret, redirectUri };
+}
+
+// Validate environment variables at startup
+const { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, redirectUri: REDIRECT_URI } = validateEnvironment();
 
 // Create server instance
 const server = new McpServer({
   name: "google-tasks",
   version: "1.0.0",
 });
-
-
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = 'http://localhost:3000/oauth2callback';
-const REDIRECT_PORT = 3000;
 
 // Google OAuth setup
 const oauth2Client = new OAuth2Client(
@@ -35,24 +77,123 @@ const oauth2Client = new OAuth2Client(
 );
 
 // Load saved credentials if any
-let credentials : any = null;
+let credentials: StoredCredentials | null = null;
+
+// HTML sanitization helper
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Port availability check
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.listen(port, () => {
+      server.once('close', () => resolve(true));
+      server.close();
+    });
+    server.on('error', () => resolve(false));
+  });
+}
+
+async function findAvailablePort(startPort: number, maxAttempts = 10): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(`No available port found in range ${startPort}-${startPort + maxAttempts}`);
+}
+
+// Token refresh logic
+async function ensureValidToken(): Promise<void> {
+  if (!credentials) {
+    throw new Error('Not authenticated');
+  }
+
+  // Check if token is expired or about to expire (within 5 minutes)
+  const now = Date.now();
+  const expiryBuffer = 5 * 60 * 1000; // 5 minutes
+
+  if (credentials.expiry_date && credentials.expiry_date <= now + expiryBuffer) {
+    if (!credentials.refresh_token) {
+      throw new Error('Token expired and no refresh token available');
+    }
+
+    // Refresh the token
+    oauth2Client.setCredentials({
+      refresh_token: credentials.refresh_token,
+    });
+
+    const { credentials: newCredentials } = await oauth2Client.refreshAccessToken();
+    credentials = {
+      ...newCredentials,
+      refresh_token: credentials.refresh_token, // Preserve refresh token
+    } as StoredCredentials;
+
+    oauth2Client.setCredentials(credentials);
+  }
+}
+
+// Current port in use (dynamic)
+let currentRedirectPort = REDIRECT_PORT;
 
 // Initialize Google Tasks client
 const tasks = google.tasks({ version: 'v1', auth: oauth2Client });
 
 // Authentication server reference
-let authServer : http.Server | null = null;
+let authServer: http.Server | null = null;
 
 // Helper function to check if authenticated
 function isAuthenticated() {
   return credentials !== null;
 }
 
+// Enhanced Zod validation schemas
+const TaskListIdSchema = z.string()
+  .min(1, "Task list ID cannot be empty")
+  .max(200, "Task list ID too long")
+  .regex(/^[a-zA-Z0-9_-]+$/, "Invalid task list ID format");
+
+const TaskIdSchema = z.string()
+  .min(1, "Task ID cannot be empty")
+  .max(200, "Task ID too long")
+  .regex(/^[a-zA-Z0-9_-]+$/, "Invalid task ID format");
+
+const TaskTitleSchema = z.string()
+  .min(1, "Task title cannot be empty")
+  .max(1024, "Task title exceeds maximum length")
+  .trim();
+
+const TaskNotesSchema = z.string()
+  .max(8192, "Notes exceed maximum length")
+  .optional();
+
+const Rfc3339DateSchema = z.string()
+  .regex(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/,
+    "Due date must be in RFC 3339 format (e.g., 2025-03-19T12:00:00Z)"
+  )
+  .refine(
+    (date) => !isNaN(Date.parse(date)),
+    "Invalid date value"
+  )
+  .optional();
+
 // Authentication tool
-server.tool(
+server.registerTool(
   "authenticate",
-  "Get URL to authenticate with Google Tasks",
-  {},
+  {
+    title: "Authenticate with Google Tasks",
+    description: "Get URL to authenticate with Google Tasks",
+    inputSchema: {},
+  },
   async () => {
     // Make sure any previous server is closed
     if (authServer) {
@@ -64,6 +205,14 @@ server.tool(
       authServer = null;
     }
 
+    // Determine port from redirect URI
+    const redirectUrl = new URL(REDIRECT_URI);
+    const defaultPort = redirectUrl.port ? parseInt(redirectUrl.port, 10) : REDIRECT_PORT;
+    
+    // Use the configured redirect URI port (no dynamic port changes to avoid OAuth mismatch)
+    // If port is in use, it will error when trying to listen, which is acceptable
+    currentRedirectPort = defaultPort;
+
     // Create the temporary HTTP server for OAuth callback
     authServer = http.createServer(async (req, res) => {
       try {
@@ -71,16 +220,16 @@ server.tool(
         const queryParams = url.parse(req.url || '', true).query;
         const code = queryParams.code;
         
-        if (code) {
+        if (code && typeof code === 'string') {
           console.error('✅ Authorization code received');
           
-          // Send success response with the code
+          // Send success response with the code (sanitized)
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(`
             <h1>Authorization Code Received</h1>
             <p>Please copy this code and use it with the 'set-auth-code' tool in Claude:</p>
             <div style="padding: 10px; background-color: #f0f0f0; border: 1px solid #ccc; margin: 20px 0;">
-              <code>${code}</code>
+              <code>${escapeHtml(code)}</code>
             </div>
             <p>You can close this window after copying the code.</p>
           `);
@@ -103,20 +252,21 @@ server.tool(
       } catch (error) {
         console.error('Error during authentication:', error);
         res.writeHead(500, { 'Content-Type': 'text/html' });
+        const errorMessage = error instanceof Error ? escapeHtml(error.message) : escapeHtml(String(error));
         res.end(`
           <h1>Authentication Error</h1>
-          <p>${error instanceof Error ? error.message : String(error)}</p>
+          <p>${errorMessage}</p>
         `);
       }
     });
 
-    // Start the server
-    authServer.listen(REDIRECT_PORT, () => {
-      console.error(`Temporary authentication server running at http://localhost:${REDIRECT_PORT}/`);
+    // Start the server on the configured port
+    authServer.listen(currentRedirectPort, () => {
+      console.error(`Temporary authentication server running at http://localhost:${currentRedirectPort}/`);
       console.error('Waiting for authentication...');
     });
 
-    // Generate the auth URL
+    // Generate the auth URL using the configured OAuth client (with matching redirect URI)
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
@@ -136,19 +286,22 @@ server.tool(
 );
 
 // Set authentication code tool
-server.tool(
+server.registerTool(
   "set-auth-code",
-  "Set the authentication code received from Google OAuth flow",
   {
-    code: z.string().describe("The authentication code received from Google"),
+    title: "Set Authentication Code",
+    description: "Set the authentication code received from Google OAuth flow",
+    inputSchema: {
+      code: z.string().min(1, "Code cannot be empty").describe("The authentication code received from Google"),
+    },
   },
-  async ({ code }) => {
+  async ({ code }: { code: string }) => {
     try {
       const { tokens } = await oauth2Client.getToken(code);
       oauth2Client.setCredentials(tokens);
       
-      // Store tokens in memory only
-      credentials = tokens;
+      // Store tokens in memory only with proper typing
+      credentials = tokens as StoredCredentials;
       
       // Close auth server if it's still running
       if (authServer) {
@@ -185,70 +338,15 @@ server.tool(
 
 // Task List Tools
 // 1. List all task lists
-server.tool("list-tasklists", "List all task lists", {}, async () => {
-  if (!isAuthenticated()) {
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: "Not authenticated. Please use the 'authenticate' tool first.",
-        },
-      ],
-    };
-  }
-
-  try {
-    const response = await tasks.tasklists.list();
-    const taskLists = response.data.items || [];
-
-    if (taskLists.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "No task lists found.",
-          },
-        ],
-      };
-    }
-
-    const formattedLists = taskLists.map((list) => ({
-      id: list.id,
-      title: list.title,
-      updated: list.updated,
-    }));
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(formattedLists, null, 2),
-        },
-      ],
-    };
-  } catch (error) {
-    console.error("Error listing task lists:", error);
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Error listing task lists: ${error}`,
-        },
-      ],
-    };
-  }
-});
-
-// 2. Get task list by ID
-server.tool(
-  "get-tasklist",
-  "Get a task list by ID",
+const listTasklistsSchema = z.object({});
+server.registerTool(
+  "list-tasklists",
   {
-    tasklist: z.string().describe("Task list ID"),
+    title: "List Task Lists",
+    description: "List all task lists",
+    inputSchema: listTasklistsSchema,
   },
-  async ({ tasklist }) => {
+  async (args: z.infer<typeof listTasklistsSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -262,8 +360,78 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
+      const response = await tasks.tasklists.list();
+      const taskLists = response.data.items || [];
+
+      if (taskLists.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No task lists found.",
+            },
+          ],
+        };
+      }
+
+      const formattedLists = taskLists.map((list) => ({
+        id: list.id,
+        title: list.title,
+        updated: list.updated,
+      }));
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(formattedLists, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("Error listing task lists:", error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error listing task lists: ${error}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// 2. Get task list by ID
+const getTasklistSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+});
+server.registerTool(
+  "get-tasklist",
+  {
+    title: "Get Task List",
+    description: "Get a task list by ID",
+    inputSchema: getTasklistSchema,
+  },
+  async (args: z.infer<typeof getTasklistSchema>) => {
+    if (!isAuthenticated()) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Not authenticated. Please use the 'authenticate' tool first.",
+          },
+        ],
+      };
+    }
+
+    try {
+      await ensureValidToken();
       const response = await tasks.tasklists.get({
-        tasklist,
+        tasklist: args.tasklist,
       });
 
       return {
@@ -290,13 +458,17 @@ server.tool(
 );
 
 // 3. Create a new task list
-server.tool(
+const createTasklistSchema = z.object({
+  title: TaskTitleSchema.describe("Title of the new task list"),
+});
+server.registerTool(
   "create-tasklist",
-  "Create a new task list",
   {
-    title: z.string().describe("Title of the new task list"),
+    title: "Create Task List",
+    description: "Create a new task list",
+    inputSchema: createTasklistSchema,
   },
-  async ({ title }) => {
+  async (args: z.infer<typeof createTasklistSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -310,9 +482,10 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       const response = await tasks.tasklists.insert({
         requestBody: {
-          title,
+          title: args.title,
         },
       });
 
@@ -344,14 +517,18 @@ server.tool(
 );
 
 // 4. Update a task list
-server.tool(
+const updateTasklistSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  title: TaskTitleSchema.describe("New title for the task list"),
+});
+server.registerTool(
   "update-tasklist",
-  "Update an existing task list",
   {
-    tasklist: z.string().describe("Task list ID"),
-    title: z.string().describe("New title for the task list"),
+    title: "Update Task List",
+    description: "Update an existing task list",
+    inputSchema: updateTasklistSchema,
   },
-  async ({ tasklist, title }) => {
+  async (args: z.infer<typeof updateTasklistSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -365,10 +542,11 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       const response = await tasks.tasklists.update({
-        tasklist,
+        tasklist: args.tasklist,
         requestBody: {
-          title,
+          title: args.title,
         },
       });
 
@@ -400,13 +578,17 @@ server.tool(
 );
 
 // 5. Delete a task list
-server.tool(
+const deleteTasklistSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID to delete"),
+});
+server.registerTool(
   "delete-tasklist",
-  "Delete a task list",
   {
-    tasklist: z.string().describe("Task list ID to delete"),
+    title: "Delete Task List",
+    description: "Delete a task list",
+    inputSchema: deleteTasklistSchema,
   },
-  async ({ tasklist }) => {
+  async (args: z.infer<typeof deleteTasklistSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -420,15 +602,16 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       await tasks.tasklists.delete({
-        tasklist,
+        tasklist: args.tasklist,
       });
 
       return {
         content: [
           {
             type: "text",
-            text: `Task list with ID '${tasklist}' was successfully deleted.`,
+            text: `Task list with ID '${args.tasklist}' was successfully deleted.`,
           },
         ],
       };
@@ -449,30 +632,29 @@ server.tool(
 
 // Task Tools
 // 1. List tasks in a task list
-server.tool(
+const listTasksSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  showCompleted: z
+    .boolean()
+    .optional()
+    .describe("Whether to include completed tasks"),
+  showHidden: z
+    .boolean()
+    .optional()
+    .describe("Whether to include hidden tasks"),
+  showDeleted: z
+    .boolean()
+    .optional()
+    .describe("Whether to include deleted tasks"),
+});
+server.registerTool(
   "list-tasks",
-  "List all tasks in a task list",
   {
-    tasklist: z.string().describe("Task list ID"),
-    showCompleted: z
-      .boolean()
-      .optional()
-      .describe("Whether to include completed tasks"),
-    showHidden: z
-      .boolean()
-      .optional()
-      .describe("Whether to include hidden tasks"),
-    showDeleted: z
-      .boolean()
-      .optional()
-      .describe("Whether to include deleted tasks"),
+    title: "List Tasks",
+    description: "List all tasks in a task list",
+    inputSchema: listTasksSchema,
   },
-  async ({
-    tasklist,
-    showCompleted = true,
-    showHidden = false,
-    showDeleted = false,
-  }) => {
+  async (args: z.infer<typeof listTasksSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -486,11 +668,12 @@ server.tool(
     }
 
     try {
-      const response: any = await tasks.tasks.list({
-        tasklist,
-        showCompleted,
-        showHidden,
-        showDeleted,
+      await ensureValidToken();
+      const response = await tasks.tasks.list({
+        tasklist: args.tasklist,
+        showCompleted: args.showCompleted ?? true,
+        showHidden: args.showHidden ?? false,
+        showDeleted: args.showDeleted ?? false,
       });
 
       const tasksResponse = response.data.items || [];
@@ -506,7 +689,7 @@ server.tool(
         };
       }
 
-      const formattedTasks = tasksResponse.map((task: any) => ({
+      const formattedTasks = tasksResponse.map((task) => ({
         id: task.id,
         title: task.title,
         status: task.status,
@@ -539,14 +722,18 @@ server.tool(
 );
 
 // 2. Get a specific task
-server.tool(
+const getTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  task: TaskIdSchema.describe("Task ID"),
+});
+server.registerTool(
   "get-task",
-  "Get a specific task by ID",
   {
-    tasklist: z.string().describe("Task list ID"),
-    task: z.string().describe("Task ID"),
+    title: "Get Task",
+    description: "Get a specific task by ID",
+    inputSchema: getTaskSchema,
   },
-  async ({ tasklist, task }) => {
+  async (args: z.infer<typeof getTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -560,9 +747,10 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       const response = await tasks.tasks.get({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
       });
 
       return {
@@ -589,19 +777,20 @@ server.tool(
 );
 
 // 3. Create a new task
-server.tool(
+const createTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  title: TaskTitleSchema.describe("Title of the task"),
+  notes: TaskNotesSchema.describe("Notes for the task"),
+  due: Rfc3339DateSchema.describe("Due date in RFC 3339 format (e.g., 2025-03-19T12:00:00Z)"),
+});
+server.registerTool(
   "create-task",
-  "Create a new task in a task list",
   {
-    tasklist: z.string().describe("Task list ID"),
-    title: z.string().describe("Title of the task"),
-    notes: z.string().optional().describe("Notes for the task"),
-    due: z
-      .string()
-      .optional()
-      .describe("Due date in RFC 3339 format (e.g., 2025-03-19T12:00:00Z)"),
+    title: "Create Task",
+    description: "Create a new task in a task list",
+    inputSchema: createTaskSchema,
   },
-  async ({ tasklist, title, notes, due }) => {
+  async (args: z.infer<typeof createTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -615,16 +804,22 @@ server.tool(
     }
 
     try {
-      const requestBody: any = {
-        title,
+      await ensureValidToken();
+      const requestBody: {
+        title: string;
+        status: string;
+        notes?: string;
+        due?: string;
+      } = {
+        title: args.title,
         status: "needsAction",
       };
 
-      if (notes) requestBody.notes = notes;
-      if (due) requestBody.due = due;
+      if (args.notes) requestBody.notes = args.notes;
+      if (args.due) requestBody.due = args.due;
 
       const response = await tasks.tasks.insert({
-        tasklist,
+        tasklist: args.tasklist,
         requestBody,
       });
 
@@ -656,24 +851,25 @@ server.tool(
 );
 
 // 4. Update a task
-server.tool(
+const updateTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  task: TaskIdSchema.describe("Task ID"),
+  title: TaskTitleSchema.optional().describe("New title for the task"),
+  notes: TaskNotesSchema.describe("New notes for the task"),
+  status: z
+    .enum(["needsAction", "completed"])
+    .optional()
+    .describe("Status of the task"),
+  due: Rfc3339DateSchema.describe("Due date in RFC 3339 format (e.g., 2025-03-19T12:00:00Z)"),
+});
+server.registerTool(
   "update-task",
-  "Update an existing task",
   {
-    tasklist: z.string().describe("Task list ID"),
-    task: z.string().describe("Task ID"),
-    title: z.string().optional().describe("New title for the task"),
-    notes: z.string().optional().describe("New notes for the task"),
-    status: z
-      .enum(["needsAction", "completed"])
-      .optional()
-      .describe("Status of the task"),
-    due: z
-      .string()
-      .optional()
-      .describe("Due date in RFC 3339 format (e.g., 2025-03-19T12:00:00Z)"),
+    title: "Update Task",
+    description: "Update an existing task",
+    inputSchema: updateTaskSchema,
   },
-  async ({ tasklist, task, title, notes, status, due }) => {
+  async (args: z.infer<typeof updateTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -687,25 +883,29 @@ server.tool(
     }
 
     try {
-      // First, get the current task data
+      await ensureValidToken();
+      
+      // Fetch current task to preserve all fields (required fields like id, etag, etc.)
+      // Note: Google Tasks API update method accepts partial updates, but we fetch first
+      // to ensure we preserve fields like id, etag, and position that aren't in the update schema
       const currentTask = await tasks.tasks.get({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
       });
 
-      // Prepare the update request
-      const requestBody: any = {
+      // Prepare the update request, preserving existing fields
+      const requestBody = {
         ...currentTask.data,
       };
 
-      if (title !== undefined) requestBody.title = title;
-      if (notes !== undefined) requestBody.notes = notes;
-      if (status !== undefined) requestBody.status = status;
-      if (due !== undefined) requestBody.due = due;
+      if (args.title !== undefined) requestBody.title = args.title;
+      if (args.notes !== undefined) requestBody.notes = args.notes;
+      if (args.status !== undefined) requestBody.status = args.status;
+      if (args.due !== undefined) requestBody.due = args.due;
 
       const response = await tasks.tasks.update({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
         requestBody,
       });
 
@@ -737,14 +937,18 @@ server.tool(
 );
 
 // 5. Delete a task
-server.tool(
+const deleteTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  task: TaskIdSchema.describe("Task ID to delete"),
+});
+server.registerTool(
   "delete-task",
-  "Delete a task",
   {
-    tasklist: z.string().describe("Task list ID"),
-    task: z.string().describe("Task ID to delete"),
+    title: "Delete Task",
+    description: "Delete a task",
+    inputSchema: deleteTaskSchema,
   },
-  async ({ tasklist, task }) => {
+  async (args: z.infer<typeof deleteTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -758,16 +962,17 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       await tasks.tasks.delete({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
       });
 
       return {
         content: [
           {
             type: "text",
-            text: `Task with ID '${task}' was successfully deleted.`,
+            text: `Task with ID '${args.task}' was successfully deleted.`,
           },
         ],
       };
@@ -787,14 +992,18 @@ server.tool(
 );
 
 // 6. Complete a task
-server.tool(
+const completeTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  task: TaskIdSchema.describe("Task ID to mark as completed"),
+});
+server.registerTool(
   "complete-task",
-  "Mark a task as completed",
   {
-    tasklist: z.string().describe("Task list ID"),
-    task: z.string().describe("Task ID to mark as completed"),
+    title: "Complete Task",
+    description: "Mark a task as completed",
+    inputSchema: completeTaskSchema,
   },
-  async ({ tasklist, task }) => {
+  async (args: z.infer<typeof completeTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -808,10 +1017,11 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       // Get the current task
       const currentTask = await tasks.tasks.get({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
       });
 
       // Update the status to completed
@@ -822,8 +1032,8 @@ server.tool(
       };
 
       const response = await tasks.tasks.update({
-        tasklist,
-        task,
+        tasklist: args.tasklist,
+        task: args.task,
         requestBody,
       });
 
@@ -855,19 +1065,22 @@ server.tool(
 );
 
 // 7. Move a task
-server.tool(
+const moveTaskSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+  task: TaskIdSchema.describe("Task ID to move"),
+  parent: TaskIdSchema.optional().describe("Optional new parent task ID"),
+  previous: TaskIdSchema
+    .optional()
+    .describe("Optional previous sibling task ID"),
+});
+server.registerTool(
   "move-task",
-  "Move a task to another position",
   {
-    tasklist: z.string().describe("Task list ID"),
-    task: z.string().describe("Task ID to move"),
-    parent: z.string().optional().describe("Optional new parent task ID"),
-    previous: z
-      .string()
-      .optional()
-      .describe("Optional previous sibling task ID"),
+    title: "Move Task",
+    description: "Move a task to another position",
+    inputSchema: moveTaskSchema,
   },
-  async ({ tasklist, task, parent, previous }) => {
+  async (args: z.infer<typeof moveTaskSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -881,13 +1094,19 @@ server.tool(
     }
 
     try {
-      const moveParams: any = {
-        tasklist,
-        task,
+      await ensureValidToken();
+      const moveParams: {
+        tasklist: string;
+        task: string;
+        parent?: string;
+        previous?: string;
+      } = {
+        tasklist: args.tasklist,
+        task: args.task,
       };
 
-      if (parent !== undefined) moveParams.parent = parent;
-      if (previous !== undefined) moveParams.previous = previous;
+      if (args.parent !== undefined) moveParams.parent = args.parent;
+      if (args.previous !== undefined) moveParams.previous = args.previous;
 
       const response = await tasks.tasks.move(moveParams);
 
@@ -919,13 +1138,17 @@ server.tool(
 );
 
 // 8. Clear completed tasks
-server.tool(
+const clearCompletedTasksSchema = z.object({
+  tasklist: TaskListIdSchema.describe("Task list ID"),
+});
+server.registerTool(
   "clear-completed-tasks",
-  "Clear all completed tasks from a task list",
   {
-    tasklist: z.string().describe("Task list ID"),
+    title: "Clear Completed Tasks",
+    description: "Clear all completed tasks from a task list",
+    inputSchema: clearCompletedTasksSchema,
   },
-  async ({ tasklist }) => {
+  async (args: z.infer<typeof clearCompletedTasksSchema>) => {
     if (!isAuthenticated()) {
       return {
         isError: true,
@@ -939,15 +1162,16 @@ server.tool(
     }
 
     try {
+      await ensureValidToken();
       await tasks.tasks.clear({
-        tasklist,
+        tasklist: args.tasklist,
       });
 
       return {
         content: [
           {
             type: "text",
-            text: `All completed tasks in list '${tasklist}' have been cleared.`,
+            text: `All completed tasks in list '${args.tasklist}' have been cleared.`,
           },
         ],
       };
@@ -965,6 +1189,43 @@ server.tool(
     }
   }
 );
+
+// Graceful shutdown handlers
+process.on('SIGINT', async () => {
+  console.error('SIGINT received; shutting down gracefully');
+  if (authServer) {
+    try {
+      authServer.close();
+      authServer = null;
+    } catch (error) {
+      console.error('Error closing auth server during shutdown:', error);
+    }
+  }
+  try {
+    await server.close();
+  } catch (error) {
+    console.error('Error closing server during shutdown:', error);
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.error('SIGTERM received; shutting down gracefully');
+  if (authServer) {
+    try {
+      authServer.close();
+      authServer = null;
+    } catch (error) {
+      console.error('Error closing auth server during shutdown:', error);
+    }
+  }
+  try {
+    await server.close();
+  } catch (error) {
+    console.error('Error closing server during shutdown:', error);
+  }
+  process.exit(0);
+});
 
 // Start the server
 async function main() {

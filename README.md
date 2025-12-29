@@ -1,17 +1,9 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/arpitbatra123-mcp-googletasks-badge.png)](https://mseep.ai/app/arpitbatra123-mcp-googletasks)
-
 # Google Tasks MCP Server
-[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/arpitbatra123/mcp-googletasks)](https://archestra.ai/mcp-catalog/arpitbatra123__mcp-googletasks)
-
-[![smithery badge](https://smithery.ai/badge/@arpitbatra123/mcp-googletasks)](https://smithery.ai/server/@arpitbatra123/mcp-googletasks)
 
 This Model Context Protocol (MCP) server provides a bridge between Claude and Google Tasks, allowing you to manage your task lists and tasks directly through Claude.
 
-<a href="https://glama.ai/mcp/servers/@arpitbatra123/mcp-googletasks">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@arpitbatra123/mcp-googletasks/badge" alt="Google Tasks Server MCP server" />
-</a>
-
-**Note:** All ( bar some edits ) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude with instructions from me.
+> [!NOTE]
+> All (bar some edits) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude/Copilot with instructions from me.
 
 ## Features
 
@@ -75,16 +67,14 @@ This MCP server provides the following functionality:
 
 Replace the path and credentials with your own values.
 
+**Environment Variables:**
+- `GOOGLE_CLIENT_ID` (required) - Your Google OAuth Client ID
+- `GOOGLE_CLIENT_SECRET` (required) - Your Google OAuth Client Secret  
+- `GOOGLE_REDIRECT_URI` (optional) - OAuth redirect URI (defaults to `http://localhost:3000/oauth2callback`)
+
+**Note:** The server validates that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set at startup and will fail with clear error messages if they are missing or invalid.
+
 ### 3. Build and Run the Server
-#### Installing via Smithery
-
-To install Google Tasks Integration Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@arpitbatra123/mcp-googletasks):
-
-```bash
-npx -y @smithery/cli install @arpitbatra123/mcp-googletasks --client claude
-```
-
-#### Manual Installation
 
 1. Install dependencies:
 ```bash
@@ -108,13 +98,24 @@ When you first use the Google Tasks MCP server:
 4. Use the `set-auth-code` tool with this code to complete authentication
 5. You can now use all other tools to interact with Google Tasks
 
-Note that your authentication is session-based and will be lost when you restart the server. You'll need to re-authenticate each time.
+**Note:** Your authentication tokens are stored in memory and will be lost when you restart the server. However, the server now automatically refreshes access tokens when they expire (typically after 1 hour), so you won't need to re-authenticate during an active session. You will need to re-authenticate after restarting the server.
 
 ## Requirements
 
-- Node.js 14+
+- Node.js 20+ (see `package.json` engines)
 - Claude for Desktop (latest version)
 - Google Cloud Project with Tasks API enabled
+
+## Implementation Features
+
+This MCP server includes the following improvements:
+- **Environment variable validation** - Startup validation ensures required credentials are configured with clear error messages
+- **Automatic token refresh** - OAuth tokens are automatically refreshed when they expire, eliminating the need to re-authenticate during active sessions
+- **Enhanced input validation** - Comprehensive validation of all inputs including ID formats, string lengths, and RFC 3339 date formats
+- **HTML sanitization** - OAuth callback responses are sanitized to prevent XSS vulnerabilities
+- **Graceful shutdown** - Proper cleanup of resources on SIGINT/SIGTERM signals
+- **Type safety** - Full TypeScript type safety throughout the codebase with proper interfaces
+- **Configurable redirect URI** - The OAuth redirect URI can be customized via the `GOOGLE_REDIRECT_URI` environment variable
 
 ## Screenshot
 ![](./screenshot.png)
