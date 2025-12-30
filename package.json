@@ -1,7 +1,7 @@
 {
-  "name": "mcp-google-tasks",
+  "name": "google-tasks-mcp",
   "version": "1.0.0",
-  "description": "MCP server for Google Tasks integration",
+  "description": "A local MCP server for Google Tasks integration with LLMs.",
   "main": "build/index.js",
   "type": "module",
   "scripts": {
@@ -10,15 +10,19 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.7.0",
-    "dotenv": "^16.4.1",
-    "google-auth-library": "^9.4.2",
-    "googleapis": "^131.0.0",
-    "zod": "^3.22.4"
+    "@modelcontextprotocol/sdk": "^1.22.0",
+    "dotenv": "^17.2.3",
+    "google-auth-library": "^10.5.0",
+    "googleapis": "^166.0.0",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.6",
+    "@types/node": "^22.9.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.6.3"
   }
 }
