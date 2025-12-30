@@ -270,7 +270,7 @@ server.registerTool(
   {
     title: "Authenticate with Google Tasks",
     description: "Get URL to authenticate with Google Tasks",
-    inputSchema: {},
+    inputSchema: z.object({}),
   },
   async () => {
     // Make sure any previous server is closed
@@ -369,9 +369,9 @@ server.registerTool(
   {
     title: "Set Authentication Code",
     description: "Set the authentication code received from Google OAuth flow",
-    inputSchema: {
+    inputSchema: z.object({
       code: z.string().min(1, "Code cannot be empty").describe("The authentication code received from Google"),
-    },
+    }),
   },
   async ({ code }: { code: string }) => {
     try {
@@ -1281,9 +1281,9 @@ server.registerTool(
   }
 );
 
-// Graceful shutdown handlers
-process.on('SIGINT', async () => {
-  console.error('SIGINT received; shutting down gracefully');
+// Graceful shutdown handler
+async function gracefulShutdown(signal: string) {
+  console.error(`${signal} received; shutting down gracefully`);
   if (authServer) {
     try {
       authServer.close();
@@ -1298,25 +1298,11 @@ process.on('SIGINT', async () => {
     console.error('Error closing server during shutdown:', error);
   }
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  console.error('SIGTERM received; shutting down gracefully');
-  if (authServer) {
-    try {
-      authServer.close();
-      authServer = null;
-    } catch (error) {
-      console.error('Error closing auth server during shutdown:', error);
-    }
-  }
-  try {
-    await server.close();
-  } catch (error) {
-    console.error('Error closing server during shutdown:', error);
-  }
-  process.exit(0);
-});
+// Register shutdown handlers
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Start the server
 async function main() {
