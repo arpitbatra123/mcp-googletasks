@@ -8,9 +8,12 @@ import * as http from "http";
 import * as net from "net";
 import dotenv from "dotenv";
 import url from "url";
+import { promises as fs } from "fs";
+import * as path from "path";
+import * as os from "os";
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // Constants
 const SCOPES = ["https://www.googleapis.com/auth/tasks"];
@@ -79,6 +82,78 @@ const oauth2Client = new OAuth2Client(
 // Load saved credentials if any
 let credentials: StoredCredentials | null = null;
 
+// Get credentials file path
+function getCredentialsPath(): string {
+  const homeDir = os.homedir();
+  const configDir = path.join(homeDir, '.config', 'google-tasks-mcp');
+  return path.join(configDir, 'credentials.json');
+}
+
+// Save credentials to disk
+async function saveCredentials(creds: StoredCredentials): Promise<void> {
+  try {
+    const credsPath = getCredentialsPath();
+    const credsDir = path.dirname(credsPath);
+    
+    // Ensure directory exists
+    await fs.mkdir(credsDir, { recursive: true });
+    
+    // Save credentials (with restricted permissions)
+    await fs.writeFile(credsPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  } catch (error) {
+    console.error('Error saving credentials:', error);
+    // Don't throw - authentication should still work even if save fails
+  }
+}
+
+// Load credentials from disk
+async function loadCredentials(): Promise<StoredCredentials | null> {
+  try {
+    const credsPath = getCredentialsPath();
+    const data = await fs.readFile(credsPath, 'utf-8');
+    const creds = JSON.parse(data) as StoredCredentials;
+    
+    // Validate that we have required fields
+    if (!creds.access_token) {
+      return null;
+    }
+    
+    return creds;
+  } catch (error) {
+    // File doesn't exist or can't be read - that's okay
+    return null;
+  }
+}
+
+// Initialize credentials on startup
+async function initializeCredentials(): Promise<void> {
+  const savedCreds = await loadCredentials();
+  if (savedCreds) {
+    credentials = savedCreds;
+    oauth2Client.setCredentials(credentials);
+    
+    // Try to refresh token if it's expired
+    try {
+      await ensureValidToken();
+      // Save updated credentials if they were refreshed
+      if (credentials) {
+        await saveCredentials(credentials);
+      }
+    } catch (error) {
+      // Token refresh failed - credentials might be invalid
+      // Clear them so user can re-authenticate
+      console.error('Failed to refresh token on startup:', error);
+      credentials = null;
+      // Optionally delete invalid credentials file
+      try {
+        await fs.unlink(getCredentialsPath());
+      } catch {
+        // Ignore errors deleting file
+      }
+    }
+  }
+}
+
 // HTML sanitization helper
 function escapeHtml(unsafe: string): string {
   return unsafe
@@ -138,6 +213,9 @@ async function ensureValidToken(): Promise<void> {
     } as StoredCredentials;
 
     oauth2Client.setCredentials(credentials);
+    
+    // Save refreshed credentials to disk
+    await saveCredentials(credentials);
   }
 }
 
@@ -300,8 +378,11 @@ server.registerTool(
       const { tokens } = await oauth2Client.getToken(code);
       oauth2Client.setCredentials(tokens);
       
-      // Store tokens in memory only with proper typing
+      // Store tokens in memory with proper typing
       credentials = tokens as StoredCredentials;
+      
+      // Save credentials to disk for persistence
+      await saveCredentials(credentials);
       
       // Close auth server if it's still running
       if (authServer) {
@@ -543,11 +624,21 @@ server.registerTool(
 
     try {
       await ensureValidToken();
+      
+      // Fetch current task list to preserve all fields (required fields like id, etag, etc.)
+      const currentTaskList = await tasks.tasklists.get({
+        tasklist: args.tasklist,
+      });
+
+      // Prepare the update request, preserving existing fields
+      const requestBody = {
+        ...currentTaskList.data,
+        title: args.title,
+      };
+
       const response = await tasks.tasklists.update({
         tasklist: args.tasklist,
-        requestBody: {
-          title: args.title,
-        },
+        requestBody,
       });
 
       return {
@@ -1229,6 +1320,9 @@ process.on('SIGTERM', async () => {
 
 // Start the server
 async function main() {
+  // Load saved credentials on startup
+  await initializeCredentials();
+  
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Google Tasks MCP Server running on stdio");

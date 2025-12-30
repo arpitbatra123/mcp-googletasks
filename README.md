@@ -98,7 +98,10 @@ When you first use the Google Tasks MCP server:
 4. Use the `set-auth-code` tool with this code to complete authentication
 5. You can now use all other tools to interact with Google Tasks
 
-**Note:** Your authentication tokens are stored in memory and will be lost when you restart the server. However, the server now automatically refreshes access tokens when they expire (typically after 1 hour), so you won't need to re-authenticate during an active session. You will need to re-authenticate after restarting the server.
+**Note:** Your authentication tokens (including refresh tokens) are automatically saved to disk at `~/.config/google-tasks-mcp/credentials.json` with restricted permissions (600). This means:
+- **You only need to authenticate once** - credentials persist across server restarts
+- **Automatic token refresh** - Access tokens are automatically refreshed when they expire (typically after 1 hour) using the saved refresh token
+- **No re-authentication needed** - After the initial setup, you won't need to authenticate again unless you revoke access or delete the credentials file
 
 ## Requirements
 
@@ -109,16 +112,22 @@ When you first use the Google Tasks MCP server:
 ## Implementation Features
 
 This MCP server includes the following improvements:
+- **Persistent token storage** - Authentication credentials are saved to disk (`~/.config/google-tasks-mcp/credentials.json`) with restricted permissions, so you only need to authenticate once
 - **Environment variable validation** - Startup validation ensures required credentials are configured with clear error messages
-- **Automatic token refresh** - OAuth tokens are automatically refreshed when they expire, eliminating the need to re-authenticate during active sessions
+- **Automatic token refresh** - OAuth tokens are automatically refreshed when they expire, eliminating the need to re-authenticate during active sessions or after restarts
 - **Enhanced input validation** - Comprehensive validation of all inputs including ID formats, string lengths, and RFC 3339 date formats
 - **HTML sanitization** - OAuth callback responses are sanitized to prevent XSS vulnerabilities
 - **Graceful shutdown** - Proper cleanup of resources on SIGINT/SIGTERM signals
 - **Type safety** - Full TypeScript type safety throughout the codebase with proper interfaces
 - **Configurable redirect URI** - The OAuth redirect URI can be customized via the `GOOGLE_REDIRECT_URI` environment variable
 
-## Screenshot
-![](./screenshot.png)
+## Screenshots
+
+### Claude Desktop
+![Claude Desktop Screenshot](./assets/claude.png)
+
+### Cursor
+![Cursor Screenshot](./assets/cursor.png)
 
 ## License
 

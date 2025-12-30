@@ -1,7 +1,7 @@
 {
   "name": "google-tasks-mcp",
   "version": "1.0.0",
-  "description": "MCP server for Google Tasks integration",
+  "description": "A local MCP server for Google Tasks integration with LLMs.",
   "main": "build/index.js",
   "type": "module",
   "scripts": {
