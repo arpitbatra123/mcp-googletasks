@@ -5,6 +5,10 @@ This Model Context Protocol (MCP) server provides a bridge between Claude and Go
 > [!NOTE]
 > All (bar some edits) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude/Copilot with instructions from me.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/arpitbatra123-mcp-googletasks).
+
 ## Features
 
 This MCP server provides the following functionality:
