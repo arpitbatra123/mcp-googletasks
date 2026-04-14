@@ -1157,18 +1157,21 @@ server.registerTool(
 
 // 7. Move a task
 const moveTaskSchema = z.object({
-  tasklist: TaskListIdSchema.describe("Task list ID"),
+  tasklist: TaskListIdSchema.describe("Current task list ID"),
   task: TaskIdSchema.describe("Task ID to move"),
-  parent: TaskIdSchema.optional().describe("Optional new parent task ID"),
+  parent: TaskIdSchema.optional().describe("Optional new parent task ID (must be in the destination list if destinationTasklist is specified)"),
   previous: TaskIdSchema
     .optional()
-    .describe("Optional previous sibling task ID"),
+    .describe("Optional previous sibling task ID (must be in the destination list if destinationTasklist is specified)"),
+  destinationTasklist: TaskListIdSchema
+    .optional()
+    .describe("Optional destination task list ID. If set, the task is moved from `tasklist` to this list while preserving its task ID. Omit to reposition within the current list. Note: recurring tasks cannot be moved between lists (Google Tasks API limitation)."),
 });
 server.registerTool(
   "move-task",
   {
     title: "Move Task",
-    description: "Move a task to another position",
+    description: "Move a task to another position within the same list, or to a different list via destinationTasklist (task ID is preserved in both cases)",
     inputSchema: moveTaskSchema,
   },
   async (args: z.infer<typeof moveTaskSchema>) => {
@@ -1191,6 +1194,7 @@ server.registerTool(
         task: string;
         parent?: string;
         previous?: string;
+        destinationTasklist?: string;
       } = {
         tasklist: args.tasklist,
         task: args.task,
@@ -1198,6 +1202,7 @@ server.registerTool(
 
       if (args.parent !== undefined) moveParams.parent = args.parent;
       if (args.previous !== undefined) moveParams.previous = args.previous;
+      if (args.destinationTasklist !== undefined) moveParams.destinationTasklist = args.destinationTasklist;
 
       const response = await tasks.tasks.move(moveParams);
 
