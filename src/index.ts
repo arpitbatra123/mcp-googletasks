@@ -139,16 +139,25 @@ async function initializeCredentials(): Promise<void> {
       if (credentials) {
         await saveCredentials(credentials);
       }
-    } catch (error) {
-      // Token refresh failed - credentials might be invalid
-      // Clear them so user can re-authenticate
-      console.error('Failed to refresh token on startup:', error);
-      credentials = null;
-      // Optionally delete invalid credentials file
-      try {
-        await fs.unlink(getCredentialsPath());
-      } catch {
-        // Ignore errors deleting file
+    } catch (error: any) {
+      // Only wipe credentials on definitive auth revocation (invalid_grant).
+      // Transient errors (network, timeout, 5xx) should NOT destroy saved creds.
+      const isAuthRevoked = error?.response?.data?.error === 'invalid_grant'
+        || error?.message?.includes('invalid_grant')
+        || error?.code === 401;
+
+      if (isAuthRevoked) {
+        console.error('Refresh token revoked — clearing credentials:', error?.message);
+        credentials = null;
+        try {
+          await fs.unlink(getCredentialsPath());
+        } catch {
+          // Ignore errors deleting file
+        }
+      } else {
+        // Keep credentials in memory (and on disk) — the refresh token is likely still valid.
+        // The next API call will retry via ensureValidToken().
+        console.error('Transient token refresh error on startup (credentials preserved):', error?.message);
       }
     }
   }
