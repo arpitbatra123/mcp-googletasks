@@ -1,6 +1,6 @@
 # Google Tasks MCP Server
 
-This Model Context Protocol (MCP) server provides a bridge between Claude and Google Tasks, allowing you to manage your task lists and tasks directly through Claude.
+This Model Context Protocol (MCP) server provides a bridge between MCP clients and Google Tasks, allowing you to manage your task lists and tasks directly from clients like Claude Desktop, Cursor, and Codex.
 
 > [!NOTE]
 > All (bar some edits) code in this project was ["vibe coded"](https://en.wikipedia.org/wiki/Vibe_coding) - generated with Claude/Copilot with instructions from me.
@@ -17,13 +17,13 @@ This MCP server provides the following functionality:
 - `delete-tasklist` - Delete a task list
 
 ### Task Management
-- `list-tasks` - List all tasks in a task list
+- `list-tasks` - List all tasks in a task list, including paginated results
 - `get-task` - Get details about a specific task
 - `create-task` - Create a new task
 - `update-task` - Update an existing task
 - `delete-task` - Delete a task
 - `complete-task` - Mark a task as completed
-- `move-task` - Move a task (reorder or change parent)
+- `move-task` - Move a task (reorder, change parent, or move across task lists)
 - `clear-completed-tasks` - Clear all completed tasks from a list
 
 ## Setup Instructions
@@ -41,7 +41,57 @@ This MCP server provides the following functionality:
 9. Add "http://localhost:3000/oauth2callback" as an authorized redirect URI
 10. Create the client ID and secret
 
-### 2. Configure Claude for Desktop
+### 2. Configure Environment Variables
+
+Create a `.env` file in this project directory:
+
+```bash
+GOOGLE_CLIENT_ID=your_client_id_here
+GOOGLE_CLIENT_SECRET=your_client_secret_here
+GOOGLE_REDIRECT_URI=http://localhost:3000/oauth2callback
+```
+
+**Environment Variables:**
+- `GOOGLE_CLIENT_ID` (required) - Your Google OAuth Client ID
+- `GOOGLE_CLIENT_SECRET` (required) - Your Google OAuth Client Secret
+- `GOOGLE_REDIRECT_URI` (optional) - OAuth redirect URI (defaults to `http://localhost:3000/oauth2callback`)
+
+**Note:** The server validates that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set at startup and will fail with clear error messages if they are missing or invalid.
+
+### 3. Build the Server
+
+1. Install dependencies:
+```bash
+npm install
+```
+
+2. Build the server:
+```bash
+npm run build
+```
+
+### 4. Configure an MCP Client
+
+#### Codex
+
+Add the server to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.google-tasks]
+command = "zsh"
+args = ["-lc", "cd /path/to/google-tasks-mcp && exec node build/index.js"]
+```
+
+Replace `/path/to/google-tasks-mcp` with the path to this project, then restart Codex.
+
+To verify the server is registered:
+
+```bash
+codex mcp list
+codex mcp get google-tasks
+```
+
+#### Claude for Desktop
 
 1. Install [Claude for Desktop](https://claude.ai/download)
 2. Open the Claude configuration file:
@@ -54,39 +104,13 @@ This MCP server provides the following functionality:
   "mcpServers": {
     "google-tasks": {
       "command": "node",
-      "args": ["/path/to/google-tasks-mcp/build/index.js"],
-      "env": {
-        "GOOGLE_CLIENT_ID": "your_client_id_here",
-        "GOOGLE_CLIENT_SECRET": "your_client_secret_here",
-        "GOOGLE_REDIRECT_URI": "http://localhost:3000/oauth2callback"
-      }
+      "args": ["/path/to/google-tasks-mcp/build/index.js"]
     }
   }
 }
 ```
 
-Replace the path and credentials with your own values.
-
-**Environment Variables:**
-- `GOOGLE_CLIENT_ID` (required) - Your Google OAuth Client ID
-- `GOOGLE_CLIENT_SECRET` (required) - Your Google OAuth Client Secret  
-- `GOOGLE_REDIRECT_URI` (optional) - OAuth redirect URI (defaults to `http://localhost:3000/oauth2callback`)
-
-**Note:** The server validates that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set at startup and will fail with clear error messages if they are missing or invalid.
-
-### 3. Build and Run the Server
-
-1. Install dependencies:
-```bash
-npm install
-```
-
-2. Build the server:
-```bash
-npm run build
-```
-
-3. Restart Claude for Desktop
+Replace the path with your own value, then restart Claude for Desktop.
 
 ## Authentication Flow
 
@@ -106,7 +130,7 @@ When you first use the Google Tasks MCP server:
 ## Requirements
 
 - Node.js 20+ (see `package.json` engines)
-- Claude for Desktop (latest version)
+- An MCP-compatible client
 - Google Cloud Project with Tasks API enabled
 
 ## Implementation Features

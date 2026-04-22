@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { google } from "googleapis";
+import type { tasks_v1 } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import * as http from "http";
 import * as net from "net";
@@ -237,6 +238,47 @@ const tasks = google.tasks({ version: 'v1', auth: oauth2Client });
 // Authentication server reference
 let authServer: http.Server | null = null;
 
+async function listAllTaskLists(): Promise<tasks_v1.Schema$TaskList[]> {
+  const taskLists: tasks_v1.Schema$TaskList[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const response = await tasks.tasklists.list({
+      maxResults: 100,
+      pageToken,
+    });
+    taskLists.push(...(response.data.items || []));
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return taskLists;
+}
+
+async function listAllTasks(args: {
+  tasklist: string;
+  showCompleted?: boolean;
+  showHidden?: boolean;
+  showDeleted?: boolean;
+}): Promise<tasks_v1.Schema$Task[]> {
+  const allTasks: tasks_v1.Schema$Task[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const response = await tasks.tasks.list({
+      tasklist: args.tasklist,
+      showCompleted: args.showCompleted,
+      showHidden: args.showHidden,
+      showDeleted: args.showDeleted,
+      maxResults: 100,
+      pageToken,
+    });
+    allTasks.push(...(response.data.items || []));
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return allTasks;
+}
+
 // Helper function to check if authenticated
 function isAuthenticated() {
   return credentials !== null;
@@ -451,8 +493,7 @@ server.registerTool(
 
     try {
       await ensureValidToken();
-      const response = await tasks.tasklists.list();
-      const taskLists = response.data.items || [];
+      const taskLists = await listAllTaskLists();
 
       if (taskLists.length === 0) {
         return {
@@ -769,14 +810,12 @@ server.registerTool(
 
     try {
       await ensureValidToken();
-      const response = await tasks.tasks.list({
+      const tasksResponse = await listAllTasks({
         tasklist: args.tasklist,
         showCompleted: args.showCompleted ?? true,
         showHidden: args.showHidden ?? false,
         showDeleted: args.showDeleted ?? false,
       });
-
-      const tasksResponse = response.data.items || [];
 
       if (tasksResponse.length === 0) {
         return {
