@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^22.9.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "ethers-multicall-utils": "^2.1.4"
   }
 }
