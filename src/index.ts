@@ -389,11 +389,36 @@ server.registerTool(
       }
     });
 
-    // Start the server on the configured port
-    authServer.listen(currentRedirectPort, () => {
-      console.error(`Temporary authentication server running at http://localhost:${currentRedirectPort}/`);
-      console.error('Waiting for authentication...');
-    });
+    // Start the server on the configured port.
+    // listen() reports EADDRINUSE as an async 'error' event, not a throw. With no
+    // listener attached that is an unhandled 'error' and Node kills the process —
+    // taking the whole MCP server down mid-session. The port is fixed (the redirect
+    // URI is registered server-side, so we cannot fall back to another port); await
+    // the bind and surface the failure as a normal tool error instead.
+    const srv = authServer;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        srv.once('error', reject);
+        srv.listen(currentRedirectPort, () => {
+          srv.off('error', reject);
+          srv.on('error', (e) => console.error('OAuth callback server error:', e));
+          resolve();
+        });
+      });
+    } catch (e: any) {
+      authServer = null;
+      try { srv.close(); } catch {}
+      const detail =
+        e?.code === 'EADDRINUSE'
+          ? `OAuth callback port ${currentRedirectPort} is already in use, so authentication cannot start.\n\n` +
+            `Another Claude Code session most likely has an unfinished Google Tasks auth flow holding it. ` +
+            `Finish or abandon that flow (or close that session), then run 'authenticate' again.`
+          : `Could not open OAuth callback port ${currentRedirectPort}: ${e instanceof Error ? e.message : String(e)}`;
+      console.error(detail);
+      return { isError: true, content: [{ type: "text" as const, text: detail }] };
+    }
+    console.error(`Temporary authentication server running at http://localhost:${currentRedirectPort}/`);
+    console.error('Waiting for authentication...');
 
     // Generate the auth URL using the configured OAuth client (with matching redirect URI)
     const authUrl = oauth2Client.generateAuthUrl({
