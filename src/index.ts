@@ -12,9 +12,14 @@ import url from "url";
 import { promises as fs } from "fs";
 import * as path from "path";
 import * as os from "os";
+import { fileURLToPath } from "url";
 
-// Load environment variables
-dotenv.config({ quiet: true });
+// Load environment variables. Resolve .env relative to this module rather than
+// the process working directory: MCP clients spawn the server with the client's
+// own cwd, so a bare dotenv.config() finds nothing.
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+dotenv.config({ path: path.join(packageRoot, ".env"), quiet: true });
+dotenv.config({ quiet: true }); // also honour a .env in the caller's cwd, if any
 
 // Constants
 const SCOPES = ["https://www.googleapis.com/auth/tasks"];
@@ -126,9 +131,41 @@ async function loadCredentials(): Promise<StoredCredentials | null> {
   }
 }
 
+// Bootstrap credentials from a GOOGLE_REFRESH_TOKEN in the environment.
+// Used when no credentials file exists yet (fresh machine, or the file was
+// cleared) so the server does not need an interactive browser flow.
+async function bootstrapFromEnvRefreshToken(): Promise<boolean> {
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (!refreshToken) {
+    return false;
+  }
+
+  try {
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    const { credentials: newCredentials } = await oauth2Client.refreshAccessToken();
+    credentials = {
+      ...newCredentials,
+      refresh_token: refreshToken, // Preserve refresh token
+    } as StoredCredentials;
+
+    oauth2Client.setCredentials(credentials);
+    await saveCredentials(credentials);
+    return true;
+  } catch (error: any) {
+    console.error('Could not authenticate with GOOGLE_REFRESH_TOKEN:', error?.message);
+    credentials = null;
+    return false;
+  }
+}
+
 // Initialize credentials on startup
 async function initializeCredentials(): Promise<void> {
   const savedCreds = await loadCredentials();
+  if (!savedCreds) {
+    await bootstrapFromEnvRefreshToken();
+    return;
+  }
+
   if (savedCreds) {
     credentials = savedCreds;
     oauth2Client.setCredentials(credentials);
@@ -617,6 +654,27 @@ server.registerTool(
 const createTasklistSchema = z.object({
   title: TaskTitleSchema.describe("Title of the new task list"),
 });
+async function createTaskList(args: z.infer<typeof createTasklistSchema>) {
+  await ensureValidToken();
+  const response = await tasks.tasklists.insert({
+    requestBody: {
+      title: args.title,
+    },
+  });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Task list created successfully:\n\n${JSON.stringify(
+          response.data,
+          null,
+          2
+        )}`,
+      },
+    ],
+  };
+}
 server.registerTool(
   "create-tasklist",
   {
@@ -638,24 +696,8 @@ server.registerTool(
     }
 
     try {
-      await ensureValidToken();
-      const response = await tasks.tasklists.insert({
-        requestBody: {
-          title: args.title,
-        },
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Task list created successfully:\n\n${JSON.stringify(
-              response.data,
-              null,
-              2
-            )}`,
-          },
-        ],
+      return (await createTaskList(args)) as {
+        content: Array<{ type: "text"; text: string }>;
       };
     } catch (error) {
       console.error("Error creating task list:", error);
